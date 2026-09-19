@@ -1718,10 +1718,31 @@ NS4FX.BrowseKnob = function() {
         inKey: "Move",
         input: function(_channel, _control, value, _status, _group) {
             NS4FX.dbg(`Browse knob input. Shift: ${NS4FX.shift}, inKey: ${this.inKey}, value: ${value}`);
-            if (value === 1) {
-                engine.setValue(this.group, `${this.inKey}Down`, 1);
-            } else if (value === 127) {
-                engine.setValue(this.group, `${this.inKey}Up`, 1);
+
+            if (!engine.getValue("[PreviewDeck1]", "play")) {
+                // if the preview deck is NOT playing perform normal scrolling action
+                if (value === 1) {
+                    engine.setValue(this.group, `${this.inKey}Down`, 1);
+                } else if (value === 127) {
+                    engine.setValue(this.group, `${this.inKey}Up`, 1);
+                }
+            } else {
+                // if the preview deck IS currently playing jump between cue points
+                if (this.inKey == "Scroll") {
+                    // if shift key is pressed do the cue jumping
+                    if (value === 1) {
+                        gotoNextHotcue("[PreviewDeck1]");
+                    } else if (value === 127) {
+                        gotoPreviousHotcue("[PreviewDeck1]");
+                    }
+                } else {
+                    // if shift is NOT pressed then scroll
+                    if (value === 1) {
+                        engine.setValue(this.group, `${this.inKey}Down`, 1);
+                    } else if (value === 127) {
+                        engine.setValue(this.group, `${this.inKey}Up`, 1);
+                    }
+                }
             }
         },
         unshift: function() {
@@ -2278,3 +2299,138 @@ NS4FX.shiftToggle = function(_channel, control, value, _status, _group) {
         NS4FX.head_gain.unshift();
     }
 };
+
+/********************
+ * Helper functions *
+ ********************/
+
+/*
+function gotoNextHotcue(group) {
+    console.warn(`[DEBUG] gotoNextHotcue(${group})`);
+
+    var currentPos = engine.getValue(group, "playposition");
+    var nextCue = -1;
+    var nextPos = Infinity;
+
+    console.warn(`[DEBUG] playposition is ${currentPos}`);
+
+    for (var i = 1; i <= 36; i++) {
+        var pos = engine.getValue(group, "hotcue_" + i + "_position");
+
+        console.warn(`[DEBUG] hotcue_${i}_position is ${pos}`);
+
+        if (pos >= 0 && pos > currentPos && pos < nextPos) {
+            nextPos = pos;
+            nextCue = i;
+
+            console.warn(`[DEBUG] next cue is number ${nextCue} at position ${nextPos}`);
+        }
+    }
+
+    if (nextCue !== -1) {
+        console.warn(`[DEBUG] jump to next with  "hotcue_" + ${nextCue} + "_gotoandplay"`)
+        engine.setValue(
+            group,
+            "hotcue_" + nextCue + "_gotoandplay",
+            1
+        );
+    }
+}
+*/
+
+function gotoNextHotcue(group) {
+    var playPosition = engine.getValue(group, "playposition");
+    var trackSamples = engine.getValue(group, "track_samples");
+
+    if (trackSamples <= 0) {
+        return;
+    }
+
+    // Convert normalized playposition to samples
+    var currentSample = playPosition * trackSamples;
+
+    var nextCue = -1;
+    var nextCuePosition = Infinity;
+
+    for (var i = 1; i <= 36; i++) {
+        var cuePosition = engine.getValue(
+            group,
+            "hotcue_" + i + "_position"
+        );
+
+        // -1 means the hotcue isn't set
+        if (cuePosition < 0) {
+            continue;
+        }
+
+        if (cuePosition > currentSample &&
+            cuePosition < nextCuePosition) {
+
+            nextCuePosition = cuePosition;
+            nextCue = i;
+        }
+    }
+
+    if (nextCue !== -1) {
+        engine.setValue(
+            group,
+            "hotcue_" + nextCue + "_gotoandplay",
+            1
+        );
+    }
+}
+
+function gotoPreviousHotcue(group) {
+    var playPosition = engine.getValue(group, "playposition");
+    var trackSamples = engine.getValue(group, "track_samples");
+    var sampleRate = engine.getValue(group, "track_samplerate");
+
+    if (trackSamples <= 0 || sampleRate <= 0) {
+        return;
+    }
+
+    // Tolerance in seconds
+    var toleranceSeconds = 2;
+
+    // Convert normalized playposition to samples
+    var currentSample = playPosition * trackSamples;
+
+    // Convert tolerance to samples
+    var toleranceSamples = toleranceSeconds * sampleRate;
+
+    var previousCue = -1;
+    var previousCuePosition = -1;
+
+    for (var i = 1; i <= 36; i++) {
+        var cuePosition = engine.getValue(
+            group,
+            "hotcue_" + i + "_position"
+        );
+
+        // -1 means the hotcue isn't set
+        if (cuePosition < 0) {
+            continue;
+        }
+
+        // Ignore cues that are within the tolerance window
+        // behind the current position.
+        if (cuePosition < currentSample - toleranceSamples &&
+            cuePosition > previousCuePosition) {
+
+            previousCuePosition = cuePosition;
+            previousCue = i;
+        }
+    }
+
+    if (previousCue !== -1) {
+        engine.setValue(
+            group,
+            "hotcue_" + previousCue + "_gotoandplay",
+            1
+        );
+    } else {
+        // No previous hotcue -> go to start
+        engine.setValue(group, "playposition", 0);
+    }
+}
+
