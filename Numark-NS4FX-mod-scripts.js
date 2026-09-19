@@ -10,7 +10,7 @@ const useFadercutsAsStems = engine.getSetting("useFadercutsAsStems");
 const useAdditionalHotcues = engine.getSetting("useAdditionalHotcues");
 const exitSlipmodeAfterScratching = engine.getSetting("exitSlipmodeAfterScratching");
 const UsePitchPlayAsKeylock = engine.getSetting("UsePitchPlayAsKeylock");
-
+const KnobButtonLoadToPreviewDeck = engine.getSetting("KnobButtonLoadToPreviewDeck");
 /**
  * Creates a configuration object for a performance pad to be used for stem control.
  * This function handles:
@@ -1391,7 +1391,7 @@ NS4FX.Deck = function(number, midi_chan) {
         pad_pitchplay: new components.Button({
             midi: [0x94 + midi_chan, 0x02], // MIDI address for Pitch Play mode
             input: function(_channel, _control, value, _status) {
-                 if (value === 0x7F) {
+                if (value === 0x7F) {
                     if (UsePitchPlayAsKeylock) {
                         // This path implements temporary moddified mapping with pitchplay button as keylock 
                         this.output(1);
@@ -1641,8 +1641,8 @@ NS4FX.Deck = function(number, midi_chan) {
 
             if (active) {
                 // trigger soft takeover on the pitch control
-                this.pitch.disconnect();
                 engine.softTakeoverIgnoreNextValue(this.group, "rate");
+                this.pitch.disconnect();
             }
         };
     };
@@ -1737,9 +1737,39 @@ NS4FX.BrowseKnob = function() {
         inKey: "GoToItem", // Default action is to go to the selected item.
         input: function(_channel, _control, value, _status, _group) {
             NS4FX.dbg(`Browse button input. Shift: ${NS4FX.shift}, inKey: ${this.inKey}, value: ${value}`);
-            if (value > 0) { // Button pressed
+
+            if (this.inKey === "GoToItem") {
+                if (value > 0) { // Button pressed
+                    if (KnobButtonLoadToPreviewDeck == "previewStop" || KnobButtonLoadToPreviewDeck == "previewEject") {
+                        // This option tries to emulate the same behavior as in traktor, where pressing browse know button while a track is highligted 
+                        // loads it to preview deck and starts playing. Pressing it again stops the preview playback
+                        if (engine.getValue("[Library]", "focused_widget") == 3) {
+                            
+                            if (!engine.getValue("[PreviewDeck1]", "play")) {
+                                // Preview deck is NOT playing - load highlighted track and play it
+                                engine.setValue("[PreviewDeck1]", "LoadSelectedTrackAndPlay", 1);
+                            } else {
+                                // Preview deck is playing - stop it 
+                                if (KnobButtonLoadToPreviewDeck == "previewStop") {
+                                    engine.setValue("[PreviewDeck1]", "stop", 1);
+                                } else if (KnobButtonLoadToPreviewDeck == "previewEject") {
+                                    engine.setValue("[PreviewDeck1]", "stop", 1);
+                                    engine.setValue("[PreviewDeck1]", "eject", 1);
+                                    engine.setValue("[PreviewDeck1]", "eject", 0);
+                                }
+                            }
+                        } else {
+                            // Focus is NOT on the tracks - do default GotoItem operation
+                            engine.setValue(this.group, this.inKey, 1);
+                        }
+                    } else {
+                        engine.setValue(this.group, this.inKey, 1);
+                    }
+                }
+            } else {
                 engine.setValue(this.group, this.inKey, 1);
             }
+
         },
         unshift: function() {
             this.inKey = "GoToItem";
