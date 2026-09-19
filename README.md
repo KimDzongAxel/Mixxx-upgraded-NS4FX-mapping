@@ -15,7 +15,8 @@ Some of the features are very much not in line with how the controller should wo
 ### List of currrent changes:
 
 - **Keylock remap** - moved keylock enable from pitch bend buttons to pitch play pad mode button
-- **Preview deck control** - pressing knob button while track is highlighted loads it to preview deck and plays it. Second press stops it (and if selected ejects).
+- **Loop anchor remap** - mapped loop anchor control to roll pad mode button. Roll mode button was not used and loop anchor was not mapped to anything I found it useful
+- **Preview deck control** - pressing knob button while track is highlighted loads it to preview deck and plays it. Second press stops it (and if selected ejects)
 - **Preview deck hotcue scrolling** - if a track is playing on a preview deck then shift + knob turn will jump between cue points in the track so that it's easy to actually preview track without having to use mouse
 
 ## Help needed
@@ -23,3 +24,4 @@ Some of the features are very much not in line with how the controller should wo
 I'm trying to implement some features but I can't really make them work, if you happen to know how to make them work please send me a message or a PR.
 
 - disable jog wheel innertia in wheel/view mode (it's driving me crazy mad) - PLEASE SEND HELP
+  UPDATE - I'm quite sure it's hardcoded into C++ code so I will have to make a change in the mixxx code itself (tbd when)
