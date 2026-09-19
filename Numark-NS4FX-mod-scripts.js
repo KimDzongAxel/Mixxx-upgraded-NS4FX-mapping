@@ -1214,13 +1214,13 @@ NS4FX.Deck = function(number, midi_chan) {
             this.inKey = "rateRange";
             this.outMin = 0.04;
             this.outMax = 0.90;
+            engine.softTakeover(this.group, "rate", true);
         },
         unshift: function() {
             this.inKey = "rate";
             this.outMin = -1;
             this.outMax = 1;
-            // engine.softTakeover(this.group, 'rateRange', false);
-            engine.softTakeover(this.group, "rate", true);
+            engine.softTakeoverIgnoreNextValue(this.group, "rate");
         }
     });
     if (!this.active) {
