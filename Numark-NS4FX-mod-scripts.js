@@ -11,6 +11,8 @@ const useAdditionalHotcues = engine.getSetting("useAdditionalHotcues");
 const exitSlipmodeAfterScratching = engine.getSetting("exitSlipmodeAfterScratching");
 const UsePitchPlayAsKeylock = engine.getSetting("UsePitchPlayAsKeylock");
 const KnobButtonLoadToPreviewDeck = engine.getSetting("KnobButtonLoadToPreviewDeck");
+const UsePadRollAsLoopAnchor = engine.getSetting("UsePadRollAsLoopAnchor");
+
 /**
  * Creates a configuration object for a performance pad to be used for stem control.
  * This function handles:
@@ -1412,9 +1414,15 @@ NS4FX.Deck = function(number, midi_chan) {
             midi: [0x94 + midi_chan, 0x06], // MIDI address for Roll mode
             input: function(_channel, _control, value, _status) {
                 if (value === 0x7F) {
-                    this.groupContainer.turnOffOtherButtons(this);
-                    this.output(1);
-                    deck.change_padmode("roll");
+                    if (UsePadRollAsLoopAnchor) {
+                        // This path implements temporary (or permanent) moddified mapping where roll pad mode button toggles loop anchor point
+                        this.output(1);
+                        script.toggleControl(this.group, "loop_anchor");
+                    } else {
+                        this.groupContainer.turnOffOtherButtons(this);
+                        this.output(1);
+                        deck.change_padmode("roll");
+                    }
                 }
             },
             output: function(value) {
