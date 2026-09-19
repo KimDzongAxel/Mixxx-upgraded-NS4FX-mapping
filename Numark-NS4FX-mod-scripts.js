@@ -9,6 +9,7 @@ const defaultPadMode = engine.getSetting("defaultPadMode");
 const useFadercutsAsStems = engine.getSetting("useFadercutsAsStems");
 const useAdditionalHotcues = engine.getSetting("useAdditionalHotcues");
 const exitSlipmodeAfterScratching = engine.getSetting("exitSlipmodeAfterScratching");
+const UsePitchPlayAsKeylock = engine.getSetting("UsePitchPlayAsKeylock");
 
 /**
  * Creates a configuration object for a performance pad to be used for stem control.
@@ -1237,25 +1238,37 @@ NS4FX.Deck = function(number, midi_chan) {
         const is_press = this.isPress(channel, control, value, status);
         this.is_pressed = is_press;
 
-        if (is_press) {
-            if (this.other.is_pressed) {
-                // Second button was pressed, toggle keylock
-                script.toggleControl(this.group, "keylock");
-                // Mark both as having performed a keylock action to handle release correctly
-                this.keylock_action = true;
-                this.other.keylock_action = true;
-            } else {
+        if (UsePitchPlayAsKeylock) {
+            // Use moddified mapping where keylock is set with pitchplay button combo
+            if (is_press) {
                 // This is the first button pressed, perform standard/shifted action
                 engine.setValue(this.group, this.inKey, 1);
-            }
-        } else { // button release
-            if (this.keylock_action) {
-                // This button was part of a keylock toggle.
-                // On release, just reset its flag.
-                this.keylock_action = false;
-            } else {
+            } else { // button release
                 // This button was used for its primary/shifted action.
                 engine.setValue(this.group, this.inKey, 0);
+            }   
+        } else {
+            // Use default mapping mode
+            if (is_press) {
+                if (this.other.is_pressed) {
+                    // Second button was pressed, toggle keylock
+                    script.toggleControl(this.group, "keylock");
+                    // Mark both as having performed a keylock action to handle release correctly
+                    this.keylock_action = true;
+                    this.other.keylock_action = true;
+                } else {
+                    // This is the first button pressed, perform standard/shifted action
+                    engine.setValue(this.group, this.inKey, 1);
+                }
+            } else { // button release
+                if (this.keylock_action) {
+                    // This button was part of a keylock toggle.
+                    // On release, just reset its flag.
+                    this.keylock_action = false;
+                } else {
+                    // This button was used for its primary/shifted action.
+                    engine.setValue(this.group, this.inKey, 0);
+                }
             }
         }
     };
@@ -1378,10 +1391,17 @@ NS4FX.Deck = function(number, midi_chan) {
         pad_pitchplay: new components.Button({
             midi: [0x94 + midi_chan, 0x02], // MIDI address for Pitch Play mode
             input: function(_channel, _control, value, _status) {
-                if (value === 0x7F) {
-                    this.groupContainer.turnOffOtherButtons(this);
-                    this.output(1);
-                    deck.change_padmode("pitchplay");
+                 if (value === 0x7F) {
+                    if (UsePitchPlayAsKeylock) {
+                        // This path implements temporary moddified mapping with pitchplay button as keylock 
+                        this.output(1);
+                        script.toggleControl(this.group, "keylock");
+                    } else {
+                        // This path follows original mapping using (unimplemented) pitchplay
+                        this.groupContainer.turnOffOtherButtons(this);
+                        this.output(1);
+                        deck.change_padmode("pitchplay");
+                    }
                 }
             },
             output: function(value) {
