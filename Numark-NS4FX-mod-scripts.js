@@ -718,6 +718,8 @@ NS4FX.Deck = function(number, midi_chan) {
             const valueToSend = Math.min(99, Math.round(value * 100));
             NS4FX.dbg(`Updating rateRange display for deck ${deck.number} to ${valueToSend}%`);
             midi.sendShortMsg(0x90 + deck.midi_chan, 0x0E, valueToSend);
+
+            engine.softTakeover(this.group, "rate", true);
         }
     });
 
@@ -1614,9 +1616,10 @@ NS4FX.Deck = function(number, midi_chan) {
         this.setActive = function(active) {
             this.active = active;
 
-            if (!active) {
+            if (active) {
                 // trigger soft takeover on the pitch control
                 this.pitch.disconnect();
+                engine.softTakeoverIgnoreNextValue(this.group, "rate");
             }
         };
     };
