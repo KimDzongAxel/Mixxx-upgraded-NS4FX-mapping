@@ -927,6 +927,9 @@ NS4FX.Deck = function(number, midi_chan) {
         },
     });
 
+    this.pitchplay_buttons = new components.ComponentContainer();
+    this.scratch_banks_buttons = new components.ComponentContainer();
+
     // HOTCUES
     this.hotcue_buttons_5_8 = new components.ComponentContainer();
     this.hotcue_buttons_1_4 = new components.ComponentContainer();
