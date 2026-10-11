@@ -9,9 +9,22 @@ const defaultPadMode = engine.getSetting("defaultPadMode");
 const useFadercutsAsStems = engine.getSetting("useFadercutsAsStems");
 const useAdditionalHotcues = engine.getSetting("useAdditionalHotcues");
 const exitSlipmodeAfterScratching = engine.getSetting("exitSlipmodeAfterScratching");
-const UsePitchPlayAsKeylock = engine.getSetting("UsePitchPlayAsKeylock");
+const UseScratchBanksAsKeylock = engine.getSetting("UseScratchBanksAsKeylock");
 const KnobButtonLoadToPreviewDeck = engine.getSetting("KnobButtonLoadToPreviewDeck");
 const UsePadRollAsLoopAnchor = engine.getSetting("UsePadRollAsLoopAnchor");
+const usePitchPlayForMoreHotcues = engine.getSetting("usePitchPlayForMoreHotcues");
+
+/******************
+ * ENUMS AND MACROS
+ ******************/
+const LED_ON = 0x7F;
+const LED_OFF = 0x00;
+const LED_DIM = 0x01;
+
+const ButtonPressed = 0x7F;
+
+const WheelTurnLeft = 0x7F; 
+const WheelTurnRight = 0x01;
 
 /**
  * Creates a configuration object for a performance pad to be used for stem control.
@@ -50,7 +63,7 @@ const createStemPadConfig = function(deckInstance, padStateProperty, stemNumber,
             // This connection ensures the pad LED reflects the stem's mute state in Mixxx.
             this.mute_connection = engine.makeConnection(stemGroup, "mute", function(value) {
                 const isMuted = (value === 1);
-                const ledValue = isMuted ? buttonInstance.off : buttonInstance.on;
+                const ledValue = isMuted ? LED_OFF : LED_ON;
                 midi.sendShortMsg(buttonInstance.midi[0], buttonInstance.midi[1], ledValue);
             });
             this.mute_connection.trigger();
@@ -68,7 +81,7 @@ const createStemPadConfig = function(deckInstance, padStateProperty, stemNumber,
             // If shift is held, a pad tap will toggle the QuickEffect for that stem.
             // The hold-for-volume logic is bypassed.
             if (NS4FX.shift) {
-                if (value === 0x7F) { // Button pressed
+                if (value === ButtonPressed) { // Button pressed
                     const quickEffectGroup = `[QuickEffectRack1_[Channel${deckInstance.number}_Stem${stemNumber}]]`;
                     NS4FX.dbg(`Toggling ${quickEffectGroup}`);
                     const currentEffectState = engine.getValue(quickEffectGroup, "enabled");
@@ -78,7 +91,7 @@ const createStemPadConfig = function(deckInstance, padStateProperty, stemNumber,
             }
 
             // This section implements the tap-to-mute and hold-for-volume logic.
-            if (value === 0x7F) { // Button pressed
+            if (value === ButtonPressed) { // Button pressed
                 padState.isHeldForVolume = false; // Reset on each press
                 if (padState.timerId) {
                     engine.stopTimer(padState.timerId);
@@ -111,8 +124,10 @@ const createStemPadConfig = function(deckInstance, padStateProperty, stemNumber,
     };
 };
 
+// Yes, I know this is a mess but I don't have the idea on how to make it clean (yet)
 const createTransportPad = function(deck, padNumber, defaultKey, momentary) {
     const hotcueNumber = 4 + padNumber;
+    const extendedhotcueNumber = 12 + padNumber;
     const midiNote = 0x18 + (padNumber - 1);
     const midiChan = 0x94 + deck.midi_chan;
 
@@ -121,42 +136,65 @@ const createTransportPad = function(deck, padNumber, defaultKey, momentary) {
         group: deck.group,
         midi: [midiChan, midiNote],
         output: function(value) {
-            midi.sendShortMsg(this.midi[0], this.midi[1], value ? 0x7F : 0x01);
+            midi.sendShortMsg(this.midi[0], this.midi[1], value ? LED_ON : LED_OFF);
+        }
+    });
+    const extendedhotcueButton = new components.HotcueButton({
+        number: extendedhotcueNumber,
+        group: deck.group,
+        midi: [midiChan, midiNote],
+        output: function(value) {
+            midi.sendShortMsg(this.midi[0], this.midi[1], value ? LED_ON : LED_OFF);
         }
     });
     deck[`transport_pad_${padNumber}_hotcue`] = hotcueButton;
+    deck[`transport_pad_${padNumber+8}_hotcue`] = extendedhotcueButton;
 
     const button = new components.Button({
         input: function(channel, control, value, status, group) {
             NS4FX.dbg(`Transport pad ${padNumber} on deck ${deck.number} pressed with value ${value}`);
-            const isHotcueModeForTransport = useAdditionalHotcues && deck.padmode_str === "hotcue";
+            const isHotcueModeForTransport = (useAdditionalHotcues && deck.padmode_str === "hotcue") ||
+                                                (usePitchPlayForMoreHotcues && deck.padmode_str === "pitchplay");
 
             if (isHotcueModeForTransport) {
                 if (NS4FX.shift) {
                     if (value > 0) { // only trigger on press
                         NS4FX.dbg(`SHIFT on transport pad ${padNumber} on deck ${deck.number}. Clearing hotcue ${hotcueNumber}`);
-                        engine.setValue(group, `hotcue_${hotcueNumber}_clear`, 1);
+                        if (usePitchPlayForMoreHotcues && deck.padmode_str === "pitchplay") {
+                            engine.setValue(group, `hotcue_${hotcueNumber}_clear`, 1);
+                        } else {
+                            engine.setValue(group, `hotcue_${extendedhotcueNumber}_clear`, 1);
+                        }
+
                     }
                     return;
                 }
-                hotcueButton.input(channel, control, value, status, group);
+
+                if (usePitchPlayForMoreHotcues && deck.padmode_str === "pitchplay") {
+                    extendedhotcueButton.input(channel, control, value, status, group);
+                } else {
+                    hotcueButton.input(channel, control, value, status, group);
+                }
             } else {
                 if (defaultKey) {
                     if (momentary) {
-                        const isPress = (value === 0x7F);
-                        engine.setValue(group, defaultKey, isPress ? 1 : 0);
+                        engine.setValue(group, defaultKey, (value === ButtonPressed) ? 1 : 0);
                     } else {
-                        if (value === 0x7F) {
+                        if (value === ButtonPressed) {
                             engine.setValue(group, defaultKey, 1);
                         }
                     }
-                    midi.sendShortMsg(midiChan, midiNote, (value === 0x7F) ? 0x7F : 0x01);
+                    midi.sendShortMsg(midiChan, midiNote, (value === ButtonPressed) ? LED_ON : LED_DIM);
                 }
             }
         }
     });
     button.padNum = padNumber;
-    button.hcNum = hotcueNumber;
+    if (usePitchPlayForMoreHotcues && deck.padMode === "pitchplay") {
+        button.hcNum = extendedhotcueNumber;
+    } else {
+        button.hcNum = hotcueNumber;
+    }
     return button;
 };
 
@@ -204,7 +242,7 @@ NS4FX.init = function(id, debug) {
             }
             if (heldStemInfo) {
                 let controlSuffix;
-                if (value === 0x01) { // Turned right
+                if (value === WheelTurnRight) { // Turned right
                     controlSuffix = "_up_small";
                 } else { // Turned left (0x7F)
                     controlSuffix = "_down_small";
@@ -225,7 +263,7 @@ NS4FX.init = function(id, debug) {
                 if (NS4FX.shift) {
                     // control master volume
                     const group = "[Master]";
-                    if (value === 0x01) { // Turned right
+                    if (value === WheelTurnRight) { // Turned right
                         engine.setValue(group, "gain_up_small", 1);
                     } else { // Turned left (0x7F)
                         engine.setValue(group, "gain_down_small", 1);
@@ -235,7 +273,7 @@ NS4FX.init = function(id, debug) {
                     const effectUnits = ["[EffectRack1_EffectUnit1]", "[EffectRack1_EffectUnit2]"];
                     for (let i = 0; i < effectUnits.length; i++) {
                         const unitGroup = effectUnits[i];
-                        if (value === 0x01) { // Turned right
+                        if (value === WheelTurnRight) { // Turned right
                             engine.setValue(unitGroup, "super1_up_small", 1);
                         } else { // Turned left (0x7F)
                             engine.setValue(unitGroup, "super1_down_small", 1);
@@ -292,19 +330,19 @@ NS4FX.init = function(id, debug) {
     NS4FX.decks[3] = new NS4FX.Deck(3, 0x02);
     NS4FX.decks[4] = new NS4FX.Deck(4, 0x03);
 
-    // Initialize hotcue pad LEDs to a "dim" state on startup.
+    // Initialize hotcue pad LEDs to a "OFF" state on startup.
     for (let i = 0; i < 4; ++i) { // For each deck
         const pad_chan = 4 + i;
 
         // Dim pads 1-4 (notes 0x14-0x17)
         for (let n = 0x14; n <= 0x17; n++) {
-            midi.sendShortMsg(0x90 | pad_chan, n, 0x00);
+            midi.sendShortMsg(0x90 | pad_chan, n, LED_OFF);
         }
 
         if (useAdditionalHotcues) {
             // Turn off pads 5-8 (notes 0x20-0x23) with a Note-On message and velocity 0.
             for (let n = 0x20; n <= 0x23; n++) {
-                midi.sendShortMsg(0x90 | pad_chan, n, 0x00);
+                midi.sendShortMsg(0x90 | pad_chan, n, LED_OFF);
             }
         }
     }
@@ -348,9 +386,9 @@ NS4FX.init = function(id, debug) {
     // helper functions
     const led = function(group, key, midi_channel, midino) {
         if (engine.getValue(group, key)) {
-            midi.sendShortMsg(0x90 | midi_channel, midino, 0x7F);
+            midi.sendShortMsg(0x90 | midi_channel, midino, LED_ON);
         } else {
-            midi.sendShortMsg(0x80 | midi_channel, midino, 0x00);
+            midi.sendShortMsg(0x80 | midi_channel, midino, LED_OFF);
         }
     };
 
@@ -372,7 +410,7 @@ NS4FX.init = function(id, debug) {
 
         // initialize wheel mode (and leds)
         NS4FX.wheel[i] = EnableWheel;
-        midi.sendShortMsg(0x90 | i, 0x07, EnableWheel ? 0x7F : 0x01);
+        midi.sendShortMsg(0x90 | i, 0x07, EnableWheel ? LED_ON : LED_DIM);
     }
 
     // zero vu meters
@@ -427,83 +465,83 @@ NS4FX.shutdown = function() {
     // turn off a bunch of channel specific leds
     for (let i = 0; i < 4; ++i) {
         // pfl/cue button leds
-        midi.sendShortMsg(0x90 | i, 0x1B, 0x01);
+        midi.sendShortMsg(0x90 | i, 0x1B, LED_DIM);
 
         // loop leds
-        midi.sendShortMsg(0x80 | i + 5, 0x32, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x33, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x34, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x35, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x38, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x39, 0x00);
+        midi.sendShortMsg(0x80 | i + 5, 0x32, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x33, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x34, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x35, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x38, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x39, LED_OFF);
 
         // play leds
-        midi.sendShortMsg(0x90 | i, 0x00, 0x01);
-        midi.sendShortMsg(0x90 | i, 0x04, 0x01);
+        midi.sendShortMsg(0x90 | i, 0x00, LED_DIM);
+        midi.sendShortMsg(0x90 | i, 0x04, LED_DIM);
 
         // sync leds
-        midi.sendShortMsg(0x90 | i, 0x00, 0x02);
-        midi.sendShortMsg(0x90 | i, 0x04, 0x03);
+        midi.sendShortMsg(0x90 | i, 0x00, 0x02); // ???
+        midi.sendShortMsg(0x90 | i, 0x04, 0x03); // ???
 
         // cue leds
-        midi.sendShortMsg(0x90 | i, 0x00, 0x01);
-        midi.sendShortMsg(0x90 | i, 0x04, 0x05);
+        midi.sendShortMsg(0x90 | i, 0x00, 0x01); // ???
+        midi.sendShortMsg(0x90 | i, 0x04, 0x05); // ???
 
         // hotcue leds
-        midi.sendShortMsg(0x80 | i + 5, 0x18, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x19, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x1A, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x1B, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x20, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x21, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x22, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x23, 0x00);
+        midi.sendShortMsg(0x80 | i + 5, 0x18, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x19, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x1A, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x1B, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x20, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x21, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x22, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x23, LED_OFF);
 
         // auto-loop leds
-        midi.sendShortMsg(0x80 | i + 5, 0x14, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x15, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x16, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x17, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x1C, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x1D, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x1E, 0x00);
-        midi.sendShortMsg(0x80 | i + 5, 0x1F, 0x00);
+        midi.sendShortMsg(0x80 | i + 5, 0x14, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x15, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x16, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x17, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x1C, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x1D, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x1E, LED_OFF);
+        midi.sendShortMsg(0x80 | i + 5, 0x1F, LED_OFF);
 
         // update spinner and position indicator
-        midi.sendShortMsg(0xB0 | i, 0x3F, 0);
-        midi.sendShortMsg(0xB0 | i, 0x06, 0);
+        midi.sendShortMsg(0xB0 | i, 0x3F, LED_OFF);
+        midi.sendShortMsg(0xB0 | i, 0x06, LED_OFF);
 
         // keylock indicator
-        midi.sendShortMsg(0x80 | i, 0x0D, 0x00);
+        midi.sendShortMsg(0x80 | i, 0x0D, LED_OFF);
 
         // turn off bpm arrows
-        midi.sendShortMsg(0x80 | i, 0x0A, 0x00); // down arrow off
-        midi.sendShortMsg(0x80 | i, 0x09, 0x00); // up arrow off
+        midi.sendShortMsg(0x80 | i, 0x0A, LED_OFF); // down arrow off
+        midi.sendShortMsg(0x80 | i, 0x09, LED_OFF); // up arrow off
 
         // turn off slip indicator
-        midi.sendShortMsg(0x80 | i, 0x0F, 0x00);
+        midi.sendShortMsg(0x80 | i, 0x0F, LED_OFF);
 
         // turn off wheel button leds
-        midi.sendShortMsg(0x80 | i, 0x07, 0x00);
+        midi.sendShortMsg(0x80 | i, 0x07, LED_OFF);
     }
 
     // dim FX leds
-    midi.sendShortMsg(0x98, 0x00, 0x01);
-    midi.sendShortMsg(0x98, 0x01, 0x01);
-    midi.sendShortMsg(0x98, 0x02, 0x01);
-    midi.sendShortMsg(0x99, 0x00, 0x01);
-    midi.sendShortMsg(0x99, 0x01, 0x01);
-    midi.sendShortMsg(0x99, 0x02, 0x01);
+    midi.sendShortMsg(0x98, 0x00, LED_DIM);
+    midi.sendShortMsg(0x98, 0x01, LED_DIM);
+    midi.sendShortMsg(0x98, 0x02, LED_DIM);
+    midi.sendShortMsg(0x99, 0x00, LED_DIM);
+    midi.sendShortMsg(0x99, 0x01, LED_DIM);
+    midi.sendShortMsg(0x99, 0x02, LED_DIM);
 
     // turn off sampler leds
-    midi.sendShortMsg(0x8F, 0x21, 0x00);
-    midi.sendShortMsg(0x8F, 0x22, 0x00);
-    midi.sendShortMsg(0x8F, 0x23, 0x00);
-    midi.sendShortMsg(0x8F, 0x24, 0x00);
+    midi.sendShortMsg(0x8F, 0x21, LED_OFF);
+    midi.sendShortMsg(0x8F, 0x22, LED_OFF);
+    midi.sendShortMsg(0x8F, 0x23, LED_OFF);
+    midi.sendShortMsg(0x8F, 0x24, LED_OFF);
 
     // zero vu meters
-    midi.sendShortMsg(0xBF, 0x44, 0);
-    midi.sendShortMsg(0xBF, 0x45, 0);
+    midi.sendShortMsg(0xBF, 0x44, LED_OFF);
+    midi.sendShortMsg(0xBF, 0x45, LED_OFF);
 
     // send final shutdown message
     const byteArray = [0xF0, 0x00, 0x20, 0x7F, 0x02, 0xF7];
@@ -535,7 +573,7 @@ NS4FX.EffectUnit = function() {
         this.effects.forEach(function(effect) {
             const group = `[EffectRack1_EffectUnit${effect.unit}_Effect${self.effects.filter(e => e.unit === effect.unit).indexOf(effect) + 1}]`;
             const isEnabled = engine.getValue(group, "enabled");
-            self.effectButtons[effect.name].output(isEnabled ? 0x7F : 0x00);
+            self.effectButtons[effect.name].output(isEnabled ? LED_ON : LED_OFF);
         });
     };
 
@@ -567,7 +605,7 @@ NS4FX.EffectUnit = function() {
             group: `[EffectRack1_EffectUnit${effect.unit}]`,
             inKey: "enabled",
             input: function(_channel, _control, value, _status, _group) {
-                if (value === 0x7F) {
+                if (value === ButtonPressed) {
                     self.toggleEffect(effect.name);
                 }
             }
@@ -636,9 +674,9 @@ NS4FX.EffectUnit = function() {
         },
         input: function(_channel, _control, value, status, _group) {
             NS4FX.dbg(`bpmTap input. value: ${value}, status: ${status.toString(16)}, shifted: ${this.shifted}`);
-            // Only act on button press (value=0x7F) and only on one of the two MIDI messages (status=0x98)
+            // Only act on button press (value=0x7F) OR only on one of the two MIDI messages (status=0x98)
             // to avoid the action being triggered twice by the single physical button.
-            if (value !== 0x7F || status !== 0x98) {
+            if (value !== ButtonPressed || status !== 0x98) {
                 return;
             }
 
@@ -798,7 +836,7 @@ NS4FX.Deck = function(number, midi_chan) {
 
     this.play_button = new components.PlayButton({
         midi: [0x90 + midi_chan, 0x00],
-        off: 0x01,
+        off: LED_DIM,
         sendShifted: true,
         shiftControl: true,
         shiftOffset: 4,
@@ -833,7 +871,7 @@ NS4FX.Deck = function(number, midi_chan) {
 
     this.cue_button = new components.CueButton({
         midi: [0x90 + midi_chan, 0x01],
-        off: 0x01,
+        off: LED_DIM,
         sendShifted: true,
         shiftControl: true,
         shiftOffset: 4,
@@ -867,11 +905,16 @@ NS4FX.Deck = function(number, midi_chan) {
         this.transport_pad_2_hotcue.connect();
         this.transport_pad_3_hotcue.connect();
         this.transport_pad_4_hotcue.connect();
+        
+        this.transport_pad_9_hotcue.connect();
+        this.transport_pad_10_hotcue.connect();
+        this.transport_pad_11_hotcue.connect();
+        this.transport_pad_12_hotcue.connect();
     }
 
     this.sync_button = new components.Button({
         midi: [0x90 + midi_chan, 0x02],
-        off: 0x01,
+        off: LED_DIM,
         sendShifted: true,
         shiftControl: true,
         shiftOffset: 1,
@@ -937,6 +980,9 @@ NS4FX.Deck = function(number, midi_chan) {
     this.hotcue_buttons_5_8 = new components.ComponentContainer();
     this.hotcue_buttons_1_4 = new components.ComponentContainer();
 
+    this.hotcue_buttons_9_12 = new components.ComponentContainer();
+    this.hotcue_buttons_13_16 = new components.ComponentContainer();
+
     this.roll_buttons = new components.ComponentContainer();
     this.slicer_buttons = new components.ComponentContainer();
     this.sampler_buttons = new components.ComponentContainer({
@@ -946,7 +992,7 @@ NS4FX.Deck = function(number, midi_chan) {
                     const samplerGroup = `[Sampler${this[button].number}]`; // Group of the corresponding sampler
                     const isTrackLoaded = engine.getValue(samplerGroup, "track_loaded"); // Check if a track is loaded
                     // LED lights up when a track is loaded
-                    deck.sampler_buttons[button].output(isTrackLoaded ? 1 : 0);
+                    deck.sampler_buttons[button].output(isTrackLoaded ? LED_OFF : LED_OFF);
                 }
             }
         }
@@ -989,7 +1035,35 @@ NS4FX.Deck = function(number, midi_chan) {
         };
     };
 
+    // Second page hotcue buttons 13 - 16
     for (let i = 1; i <= 4; ++i) {
+        this.hotcue_buttons_13_16[i] = new components.HotcueButton({
+            group: this.group,
+            midi: [0x94 + midi_chan, 0x1F + i],
+            number: i + 12,
+            output: function(value) {
+                midi.sendShortMsg(this.midi[0], this.midi[1], value ? 0x7F : 0x00);
+            }
+        });
+        if (useAdditionalHotcues) {
+            addShiftClearToHotcue(this.hotcue_buttons_13_16[i]);
+        }
+
+        // Second page hotcue buttons 9 - 12
+        this.hotcue_buttons_9_12[i] = new components.HotcueButton({
+            group: this.group,
+            midi: [0x94 + midi_chan, 0x13 + i], // notes 0x14, 0x15, 0x16, 0x17
+            number: i+8,
+            output: function(value) {
+                midi.sendShortMsg(this.midi[0], this.midi[1], value ? 0x7F : 0x00);
+            }
+        });
+
+        if (useAdditionalHotcues) {
+            addShiftClearToHotcue(this.hotcue_buttons_9_12[i]);
+        }
+
+        // Additional pads 5 - 8
         this.hotcue_buttons_5_8[i] = new components.HotcueButton({
             group: this.group,
             midi: [0x94 + midi_chan, 0x1F + i],
@@ -1155,6 +1229,29 @@ NS4FX.Deck = function(number, midi_chan) {
         this.hotcue_buttons[k + 4] = this.hotcue_buttons_5_8[k]; // hotcues 5-8
     }
 
+    // Doing the same for second page of hotcues
+    // Combine the two rows of hotcue pads into a single container for easier management in pad modes.
+    this.extended_hotcue_buttons = new components.ComponentContainer({
+        updateLEDs: function() {
+            NS4FX.dbg(`Updating hotcue LEDs for deck ${deck.number}`);
+            this.forEachComponent(function(c) {
+                if (c.number === undefined) {
+                    NS4FX.dbg("  HC with undefined number, skipping");
+                    return;
+                }
+                const outKey = `hotcue_${c.number}_enabled`;
+                const value = engine.getValue(c.group, outKey);
+                NS4FX.dbg(`  HC ${c.number} (${c.group}) val: ${value}`);
+                // Directly send MIDI message to ensure LEDs are completely off (0x00) instead of dim (0x01).
+                midi.sendShortMsg(c.midi[0], c.midi[1], value ? 0x7F : 0x00);
+            });
+        }
+    });
+    for (let k = 1; k <= 4; k++) {
+        this.extended_hotcue_buttons[k] = this.hotcue_buttons_9_12[k];
+        this.extended_hotcue_buttons[k + 4] = this.hotcue_buttons_13_16[k];
+    }
+
     this.change_padmode = function(padmode) {
         NS4FX.dbg(`Deck ${this.number} change_padmode: from ${this.padmode_str} to ${padmode}`);
         this.padmode_str = padmode;
@@ -1178,13 +1275,22 @@ NS4FX.Deck = function(number, midi_chan) {
             // LED updates are handled by the connections within each stem button.
             buttons = this.stems_buttons;
         } else if (padmode === "pitchplay") {
-            print("not implemented yet");
+            if (usePitchPlayForMoreHotcues) {
+                deck.hotcue_buttons.updateLEDs();
+                buttons = this.extended_hotcue_buttons;
+            } else {
+                print("not implemented yet");
+            }
         } else if (padmode === "roll") {
             buttons = this.roll_buttons;
         } else if (padmode === "slicer") {
             buttons = this.slicer_buttons;
         } else if (padmode === "scratchbanks") {
-            print("not implemented yet");
+            if (UseScratchBanksAsKeylock) {
+                print("Keylock toggle remap enabled - Toggling KeyLock");
+            } else {
+                print("not implemented yet");
+            }
         }
         this.hotcues.forEachComponent(function(component) {
             component.disconnect();
@@ -1240,7 +1346,7 @@ NS4FX.Deck = function(number, midi_chan) {
         const is_press = this.isPress(channel, control, value, status);
         this.is_pressed = is_press;
 
-        if (UsePitchPlayAsKeylock) {
+        if (UseScratchBanksAsKeylock) {
             // Use moddified mapping where keylock is set with pitchplay button combo
             if (is_press) {
                 // This is the first button pressed, perform standard/shifted action
@@ -1330,7 +1436,7 @@ NS4FX.Deck = function(number, midi_chan) {
     // PAD MODE
     this.padMode = new components.ComponentContainer({
         pad_hotcue: new components.Button({
-            midi: [0x94 + midi_chan, 0x00], // MIDI address for Hotcue mode
+            midi: [0x94 + midi_chan, 0x00], // MIDI address for Hotcue mode 
             input: function(_channel, _control, value, _status) {
                 if (value === 0x7F) { // Button pressed
                     this.groupContainer.turnOffOtherButtons(this); // Deactivates other LEDs
@@ -1393,21 +1499,20 @@ NS4FX.Deck = function(number, midi_chan) {
         pad_pitchplay: new components.Button({
             midi: [0x94 + midi_chan, 0x02], // MIDI address for Pitch Play mode
             input: function(_channel, _control, value, _status) {
-                if (value === 0x7F) {
-                    if (UsePitchPlayAsKeylock) {
-                        // This path implements temporary moddified mapping with pitchplay button as keylock 
-                        this.output(1);
-                        script.toggleControl(this.group, "keylock");
-                    } else {
-                        // This path follows original mapping using (unimplemented) pitchplay
-                        this.groupContainer.turnOffOtherButtons(this);
-                        this.output(1);
+                console.warn(`PITCH PLAY 1 | usePitchPlayForMoreHotcues = ${usePitchPlayForMoreHotcues}`);
+                if (usePitchPlayForMoreHotcues) {
+                    console.warn("PITCH PLAY 2");
+                    if (value === 0x7F) { // Button pressed
+                        console.warn("PITCH PLAY 3");
+                        this.groupContainer.turnOffOtherButtons(this); // Deactivates other LEDs
+                        this.output(1); // Activates LED for this mode
+                        // Activate logic for Hotcue mode
                         deck.change_padmode("pitchplay");
                     }
                 }
             },
             output: function(value) {
-                this.send(value ? 0x7F : 0x00);
+                this.send(value ? 0 : 0); // LED on/off
             }
         }),
         pad_roll: new components.Button({
@@ -1446,13 +1551,20 @@ NS4FX.Deck = function(number, midi_chan) {
             midi: [0x94 + midi_chan, 0x0F], // MIDI address for Scratch Banks mode
             input: function(_channel, _control, value, _status) {
                 if (value === 0x7F) {
-                    this.groupContainer.turnOffOtherButtons(this);
-                    this.output(1);
-                    deck.change_padmode("scratchbanks");
+                    if (UseScratchBanksAsKeylock) {
+                        // This path implements temporary moddified mapping with pitchplay button as keylock 
+                        this.output(1);
+                        script.toggleControl(this.group, "keylock");
+                    } else {
+                        // This path follows original mapping using (unimplemented) pitchplay
+                        this.groupContainer.turnOffOtherButtons(this);6
+                        this.output(1);
+                        deck.change_padmode("pitchplay");
+                    }
                 }
             },
             output: function(value) {
-                this.send(value ? 0x7F : 0x00);
+                this.send(value ? 0x7F : 0); // LED on/off
             }
         }),
         turnOffOtherButtons: function(activeButton) {
